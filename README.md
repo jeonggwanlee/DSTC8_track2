@@ -61,3 +61,7 @@ meta_learning 버전도 곧 추가 예정입니다. (valid loss 쪽 버그.)
 mldc/trainer/gpt_trainer.py에서 training, validation, 모델 save, 모델 load 가 진행됩니다.
 
 각종 옵션들도(meta_lr, lr, ...) 디버깅 동안에는 mldc/trainer/gpt_trainer.py 에서 변수 지정 후 수동으로 변경 중입니다.
+
+## ignore_domain
+
+초반 몇 iteration 동안은 loss 가 감소하지만, 이후에는 lm_loss 기준 5.~~ 정도로 크게 변하지 않고 있습니다.
