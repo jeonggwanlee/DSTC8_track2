@@ -49,7 +49,7 @@ meta_learning 버전도 곧 추가 예정입니다. (valid loss 쪽 버그.)
   tensorboard --logdir=./metalwoz-retrieval-model_ignore_domain/logs
 ~~~
 
-## predict
+## predict (== sentence generation)
 
 곧 업로드할 예정입니다.
 
