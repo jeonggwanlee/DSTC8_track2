@@ -1,0 +1,4 @@
+tensorflow-gpu
+pytorch-transformers==1.0.0
+spacy
+django
