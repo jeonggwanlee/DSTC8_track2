@@ -38,6 +38,10 @@ https://github.com/microsoft/dstc8-meta-dialog
 현재 ignore_domain.sh 만 안정적으로 돌아가는 상태입니다.
 meta_learning 버전도 곧 추가 예정입니다. (valid loss 쪽 버그.)
 
+~~~
+  sh train_meta_learning.sh (meta-learning)
+~~~
+
 ## log (tensorboard)
 
 4. tensorboard 실행
