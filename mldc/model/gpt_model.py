@@ -302,7 +302,7 @@ class GPT(RepresentationBase):
 
                     # my_models' predict_input_ids
                     if b_full:
-                        predict_input_ids = input_ids[0, :self.max_length].unsqueeze(0)
+                        predict_input_ids = input_ids[:, :self.max_length]
                     else:
                         if input_ids.shape[1] > self.max_length:
                             input_ids = input_ids[:, :self.max_length]
