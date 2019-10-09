@@ -227,7 +227,7 @@ class GPT(RepresentationBase):
             origin_token_type_ids = copy.deepcopy(token_type_ids)
 
             # Inference while loop
-            while infer_iter <= self.max_length:
+            while infer_iter <= self.max_length-1:
                 input_ids, token_type_ids = self.build_input(input_ids, token_type_ids, sys_utt)
 
                 lm_logits, mc_logits, _ = self.model(input_ids, token_type_ids=token_type_ids)
@@ -304,6 +304,9 @@ class GPT(RepresentationBase):
                     if b_full:
                         predict_input_ids = input_ids[0, :self.max_length].unsqueeze(0)
                     else:
+                        if input_ids.shape[1] > self.max_length:
+                            input_ids = input_ids[:, :self.max_length]
+
                         input_ids_pad_num = self.max_length - input_ids.shape[1]
 
                         assert(input_ids_pad_num >= 0)
