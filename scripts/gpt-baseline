@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+import os
+import click
+import json
+import logging
+import torch
+import sys
+
+from mldc.util import exp_dir, NLGEvalOutput, output_dir_option, overwrite_param
+from mldc.task.gpt_task import GptTask
+from zipfile import ZipFile
+import numpy as np
+
+from pytext.config.component import register_tasks
+from pytext.config.serialize import parse_config
+from pytext.main import gen_config_impl, train_model, load
+from tensorboardX import SummaryWriter
+from textwrap import TextWrapper
+
+from django.conf import settings
+settings.configure()
+
+LOG = logging.getLogger("mldc")
+
+
+class Tee(object):
+    def __init__(self, *files):
+        self.files = files
+    def write(self, obj):
+        for f in self.files:
+            f.write(obj)
+            f.flush() # If you want the output to be visible immediately
+    def flush(self) :
+        for f in self.files:
+            f.flush()
+
+
+
+@click.group()
+def cli():
+    pass
+
+
+@cli.command('train')
+@click.argument('zipfile')
+@click.argument('options', nargs=-1, type=click.UNPROCESSED)
+@click.option('-p', '--preproc-dir', default='data', type=click.Path(dir_okay=True, file_okay=False, exists=True),
+              help="directory containing fasttext/sentencepiece models")
+@click.option('--input-embed', type=click.Choice(('SentencepieceFasttextEmbed', 'BERTEmbed', 'GPT2Embed')), default="GPT2Embed")
+@click.option('--train-domain', "train_domains", multiple=True, default=[])
+@click.option('--eval-domain', "eval_domains", multiple=True, default=[])
+@click.option('--test-domain', "test_domains", multiple=True, default=[])
+@click.option('--method', type=click.Choice(('ignore-domain', 'meta-learning')), default="ignore-domain")
+@click.option('-v', '--verbose', is_flag=True)
+@output_dir_option
+def train_retrieval(zipfile, options, preproc_dir, input_embed,
+                    train_domains, eval_domains, test_domains, method, verbose):
+    """
+    "train" the retrieval model.
+
+    This model doesn't actually need to be trained, the command only serves as a demonstration for
+    how training can be executed.
+    """
+
+    print("\n\n\t\tcheck your logging file!\n\n")
+    print("\t\t Are you sure that your log file is fresh?")
+    #logging_file = 'log_ALARM.txt'
+    #logging_file = 'log_ignore_domain_version2.txt'
+    logging_file = 'log_debug.txt'
+    f = open(logging_file, 'a')
+    original = sys.stdout
+    sys.stdout = Tee(sys.stdout, f)
+    print('test')
+
+    from mldc.hacks import disable_shared_memory
+    disable_shared_memory()
+    register_tasks(GptTask)
+    options = tuple()
+    options = list(options)
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
+    logging.getLogger("pytorch_pretrained_bert.tokenization").setLevel(logging.WARNING)
+
+    if not train_domains:
+        train_domains = set([f for f in ZipFile(zipfile, 'r').namelist() if f.startswith('dialogues/')])
+        if eval_domains:
+            train_domains -= set(eval_domains)
+        if test_domains:
+            train_domains -= set(test_domains)
+        train_domains = list(train_domains)
+
+    print("options : ", options)
+    cfg = gen_config_impl("GptTask", options)
+    overwrite_param(cfg, 'modules_save_dir', exp_dir())
+    overwrite_param(cfg, 'save_snapshot_path', exp_dir('model.pt'))
+    overwrite_param(cfg, 'save_module_checkpoints', True)
+    overwrite_param(cfg['task']['GptTask']['data_handler'], 'train_path', zipfile)
+    overwrite_param(cfg['task']['GptTask']['data_handler'], 'train_domains', train_domains)
+    overwrite_param(cfg['task']['GptTask']['data_handler'], 'eval_path', zipfile)
+    overwrite_param(cfg['task']['GptTask']['data_handler'], 'eval_domains', eval_domains)
+    overwrite_param(cfg['task']['GptTask']['data_handler'], 'test_path', zipfile)
+    overwrite_param(cfg['task']['GptTask']['data_handler'], 'test_domains', test_domains)
+    overwrite_param(cfg['task']['GptTask']['data_handler'], 'test_batch_size', 1)
+    overwrite_param(cfg['task']['GptTask']['data_handler'], 'n_workers', 1)
+    overwrite_param(cfg['task']['GptTask']['data_handler'], 'max_turns', 2)
+    overwrite_param(cfg['task']['GptTask']['data_handler'], 'preproc_chunksize', 1000)
+    overwrite_param(cfg['task']['GptTask']['data_handler'], 'all_responses', True)
+    overwrite_param(cfg['task']['GptTask'], 'model_needs_meta_training', True)
+    overwrite_param(cfg['task']['GptTask']['text_embedder'], 'embed_type', input_embed)
+    overwrite_param(cfg['task']['GptTask']['text_embedder'], 'max_pieces', 101)
+    overwrite_param(cfg['task']['GptTask']['text_embedder'], 'preproc_dir', preproc_dir)
+
+    with open(exp_dir('cfg.json'), 'w') as f:
+        json.dump(cfg, f, sort_keys=True, indent=2)
+
+    cfg = parse_config(cfg)
+
+    summary_writer = SummaryWriter(exp_dir('logs')) if cfg.use_tensorboard else None
+
+    if method == 'ignore-domain':
+        print("Do ignore domain")
+        trained_model, best_metric = train_model(cfg, rank=1, summary_writer=summary_writer)
+    if method == 'meta-learning':
+        print("Do Meta Learning")
+        trained_model, best_metric = train_model(cfg, rank=0, summary_writer=summary_writer)
+
+
+@cli.command('predict')
+@click.argument('model_path', default=exp_dir(),
+                type=click.Path(exists=True, file_okay=False))
+@click.argument('zipfile', type=click.Path(exists=True, dir_okay=False))
+@click.option('--test-domain', "test_domains", multiple=True, default=[])
+@click.option('--test-spec', type=click.Path(dir_okay=False, exists=True))
+@click.option('--nlg-eval-out-dir', type=click.Path(dir_okay=True, file_okay=False))
+def predict_retrieval(model_path, zipfile, test_spec, test_domains, nlg_eval_out_dir):
+    torch.set_printoptions(linewidth=130)
+    register_tasks(GptTask)
+
+    final_model = os.path.join(model_path, 'model.pt')
+
+    if not os.path.exists(final_model):
+        raise RuntimeError(f"No model found in {model_path}!")
+
+    task, _ = load(final_model)
+    if not test_domains:
+        test_domains = task.data_handler.test_domains
+
+    print("zipfile : ", zipfile)
+    print("test_spec : ", test_spec)
+    print("test_domains : ", test_domains)
+
+    for test_domain in test_domains:
+        with NLGEvalOutput(nlg_eval_out_dir, test_domain) as nlgeval:
+            task.data_handler.test_domains = (test_domain,)
+
+            te = task.data_handler.text_embedder
+
+            def to_words(ids: torch.Tensor):
+                return te.decode_ids_as_text(ids.tolist(), strip_special=True)
+
+            def to_words2(te, ids: torch.Tensor):
+                if type(ids) == torch.Tensor:
+                    turn = ids.numpy().tolist()
+                elif type(ids) == np.ndarray:
+                    turn = list(ids)
+                else:
+                    import ipdb; ipdb.set_trace()
+
+                tokens = te.decode_ids_as_tokens(turn)
+
+                def transform_byte2normal(tokenizer, byte_decoder, token):
+                    if token is None:
+                        return None
+                    temp = []
+                    for tok in token:
+                        temp.append(byte_decoder[tok])
+                    temp2 = bytearray(temp).decode('utf-8', errors=tokenizer.errors)
+                    return temp2
+                tokens = [transform_byte2normal(te.tokenizer, te.tokenizer.byte_decoder, token) for token in tokens]
+
+                str2 = "".join(tokens)
+                str2 = str2.replace("<", " <")
+                str2 = str2.replace(">", "> ")
+                str2 = str2.replace("  ", " ")
+                str2 = str2.strip()
+                return str2
+
+            # loop over all results with batch size 1
+            ctxwrap = TextWrapper(130, initial_indent='- ', subsequent_indent=' ' * len('- '))
+            for result in task.predict(zipfile, test_spec):
+                print("--------------------", result['task'], "-----------------")
+                # target batch size is always 1 if spec file is used
+                bidx = 0
+                ids, lens = result['t_inputs'][0][bidx], result['t_inputs'][4][bidx]
+                ids = ids[1, :]
+                ids = ids[ids != 50259]
+                new_ids_list = []
+                last_idx = 0
+                b_start = False
+                for id_idx in range(len(ids)):
+                    if ids[id_idx].item() == te.sys_idx or ids[id_idx].item() == te.usr_idx:
+                        if b_start:
+                            new_ids_list.append(ids[last_idx+1:id_idx-1])
+                            last_idx = id_idx
+                        b_start = True
+                #new_ids_list.append(ids[last_idx+1:-1])
+
+                for inp_idx, turn in enumerate(new_ids_list):
+                    party = ("Wizard", "User  ")[inp_idx % 2]
+                    #print(ctxwrap.fill(("INPUT     %s: " % party) + to_words(turn[:turn_len])))
+                    print(ctxwrap.fill(("INPUT     %s: " % party) + to_words2(te, turn[turn != 50259])))
+                    #print(ctxwrap.fill(("INPUT     %s: " % party) + to_words(turn[turn != 50259])))
+                target_ids = result['t_targets'][0][bidx]
+                target_lens = result['t_targets'][1][bidx]
+                #target_text = to_words(target_ids[:target_lens])
+                target_text = to_words2(te, target_ids[:target_lens])
+                print(ctxwrap.fill("  TARGET: " + target_text))
+
+                pred_ids = result['resps'][bidx][0]
+                pred_lens = result['resp_lens'][bidx]
+                #predict_text = to_words(pred_ids[:pred_lens])
+                pred_ids = pred_ids[pred_ids != te.usr_idx]
+                predict_text = to_words2(te, pred_ids[:pred_lens]) ## front is <usr> or <sys>
+                print(ctxwrap.fill("  PRED:   " + predict_text))
+                print("tt", target_text, "pt", predict_text, "did", result['t_context']['dlg_id'][bidx], "pt", len(new_ids_list))
+                nlgeval.add(target_text, predict_text,
+                            dlg_id=result['t_context']['dlg_id'][bidx],
+                            predict_turn=len(new_ids_list))
+
+
+if __name__ == '__main__':
+    cli()
