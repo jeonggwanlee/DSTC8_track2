@@ -107,7 +107,7 @@ def create_gpt_input_unit(history, pos_resp, neg_resp,
 
 
 # Create each instance from examples
-def create_instance_dict(text_embedder, examples, domains, fixed_n_turns, n_turns, all_responses):
+def create_instance_dict(text_embedder, examples, domains, fixed_n_turns, n_turns, all_responses, max_len, pad_token_idx):
     """ create instance dict considering domains"""
 
     new_domains = []
@@ -215,7 +215,8 @@ def create_instance_dict(text_embedder, examples, domains, fixed_n_turns, n_turn
                 this_history_turn_types = history_turn_types[:history_idx]
                 input_ids, mc_token_ids, lm_labels, mc_labels, turn_type_ids = create_gpt_input_unit(
                     this_history, pos_resp, neg_resp,
-                    this_history_turn_types, presp_turn_type, nresp_turn_type)
+                    this_history_turn_types, presp_turn_type, nresp_turn_type, max_len, pad_token_idx)
+
                 instance_dict['input_ids'].append(input_ids)
                 instance_dict['mc_token_ids'].append(mc_token_ids)
                 instance_dict['lm_labels'].append(lm_labels)
@@ -228,7 +229,7 @@ def create_instance_dict(text_embedder, examples, domains, fixed_n_turns, n_turn
             pos_resp, rpos_resp, neg_resp, rneg_resp, presp_turn_type, nresp_turn_type = resp_tuple
             input_ids, mc_token_ids, lm_labels, mc_labels, turn_type_ids = create_gpt_input_unit(
                 history, pos_resp, neg_resp,
-                history_turn_types, presp_turn_type, nresp_turn_type)
+                history_turn_types, presp_turn_type, nresp_turn_type, max_len, pad_token_idx)
             instance_dict['input_ids'].append(input_ids)
             instance_dict['mc_token_ids'].append(mc_token_ids)
             instance_dict['lm_labels'].append(lm_labels)

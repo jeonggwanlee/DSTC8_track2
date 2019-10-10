@@ -283,8 +283,8 @@ class GptTrainer(Trainer):
                 LOG.info("\n\ttrain_domains {}\n\n\teval_domains {}\n\n\tfixed_n_turns {}\n\n\tall_responses {}".format(
                     train_domains, eval_domains, fixed_n_turns, all_responses))
 
-                train_instance_dict = create_instance_dict(examples, train_domains, fixed_n_turns, n_turns, all_responses, self.max_len, pad_token_idx)
-                eval_instance_dict = create_instance_dict(examples, eval_domains, fixed_n_turns, n_turns, all_responses, self.max_len, pad_token_idx)
+                train_instance_dict = create_instance_dict(text_embedder, examples, train_domains, fixed_n_turns, n_turns, all_responses, self.max_len, pad_token_idx)
+                eval_instance_dict = create_instance_dict(text_embedder, examples, eval_domains, fixed_n_turns, n_turns, all_responses, self.max_len, pad_token_idx)
                 import pickle
                 with open(filename, 'wb') as f:
                     pickle.dump([train_instance_dict, eval_instance_dict], f)
