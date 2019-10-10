@@ -281,6 +281,8 @@ class GPT(RepresentationBase):
                         gt_resp_token_types = gt_resp_token_types.unsqueeze(0)
 
                         gt_token_type_ids = torch.cat((origin_token_type_ids, gt_resp_token_types), dim=1) # generated
+                        if gt_token_type_ids.shape[1] > self.max_length:
+                            gt_token_type_ids = gt_token_type_ids[:, :self.max_length]
                         assert(gt_token_type_ids.shape[1] <= self.max_length)
 
                         token_type_pad_num = self.max_length - gt_token_type_ids.shape[1]
@@ -288,6 +290,8 @@ class GPT(RepresentationBase):
                         token_type_pad = torch.ones((token_type_pad_num), device='cuda', dtype=torch.int64) * self.text_embedder.pad_idx
                         token_type_pad = token_type_pad.unsqueeze(0)
                         gt_token_type_ids_final = torch.cat((gt_token_type_ids, token_type_pad), dim=1)
+                        if gt_token_type_ids_final.shape[1] > self.max_length:
+                            gt_token_type_ids_final = gt_token_type_ids_final[:, :self.max_length]
                         assert(gt_token_type_ids_final.shape[1] <= self.max_length)
 
                     assert(gt_token_type_ids_final.shape[1] == self.max_length)

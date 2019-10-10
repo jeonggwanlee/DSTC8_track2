@@ -6,6 +6,7 @@ import random
 from typing import Any, Optional, Tuple
 import numpy as np
 from itertools import chain
+import ipdb
 
 from pytext.trainers import Trainer
 from pytext.config import PyTextConfig
@@ -480,6 +481,9 @@ class GptTrainer(Trainer):
             # CUDA Enable check
             if cuda_utils.CUDA_ENABLED:
                 model = model.cuda()
+            else:
+                import ipdb; ipdb.set_trace()
+                model = model.cuda()
             best_model_path = None
 
             # TODO Options (meta-leanring)
@@ -490,8 +494,8 @@ class GptTrainer(Trainer):
             update_step = 1 # task-level inner update steps # how many time train from support_sets
             spt_in_batchsz = 1
             qry_in_batchsz = 1
-            spt_out_batchsz = 128 // spt_in_batchsz
-            qry_out_batchsz = 128 // qry_in_batchsz
+            assert(qry_in_batchsz == 1) # TODO because of code below... ## IMPORTANT  would be DEPRECATED!!
+            query_real_batch_size = 3
             # Gpt options
             lm_coef = 2.0
             mc_coef = 1.0
@@ -504,14 +508,15 @@ class GptTrainer(Trainer):
             loading_epoch = 0
             b_model_load = False
             # model training options
-            b_meta_train = False
+            b_meta_train = True
             # How many iteration you want in one epoch.
+            ## TODO Warning!!!!!
             train_iter_size = 100 # cost = train_iter_size * task_num * (support_set + query_set)
             eval_iter_size = 1    # cost = eval_iter_size * task_num * (support_set + query_set)
 
             LOG.info("meta-learning method")
-            print("meta_lr(outer_lr) : {}\nupdate_lr(inner_lr) : {}\nupdate_step : {}\n \
-                  lm_coef : {}\nmc_coef : {}\nmax_norm_for_grad_clip : {}\ngrad_accums : {}\nloading_epoch : {}".format(
+            print("""\n\tmeta_lr(outer_lr):{}\n\tupdate_lr(inner_lr) : {}\n\tupdate_step : {}
+                  \tlm_coef : {}\n\tmc_coef : {}\n\tmax_norm_for_grad_clip : {}\n\tgrad_accums : {}\n\tloading_epoch : {}""".format(
                 meta_lr, update_lr, update_step, lm_coef, mc_coef, max_norm, gradient_accumulation_steps, loading_epoch))
             print("model_loading : {}\nDo Training : {}\ntrain_iter_size : {}\n eval_iter_size : {}".format(
                 b_model_load, b_meta_train, train_iter_size, eval_iter_size))
@@ -578,8 +583,8 @@ class GptTrainer(Trainer):
                                 task_id = t_context['task_id'][0]
                                 print("epoch {} b_idx {} task_i ({}/{}) s_domain {}".format(epoch, bidx, task_i+1, task_num, s_domain))
 
-                                support_set = tuple([torch.squeeze(s, dim=1) for s in support_set])
-                                query_set = tuple([torch.squeeze(q, dim=1) for q in query_set])
+                                support_set = tuple([torch.squeeze(s, dim=1).to('cuda') for s in support_set])
+                                query_set = tuple([torch.squeeze(q, dim=1).to('cuda') for q in query_set])
 
                                 # To avoid gpu memory lack, I did a trick like,
                                 # support_set (batch_size(128), support_unit) -> (?, small_batch_size, support_unit)
@@ -588,17 +593,16 @@ class GptTrainer(Trainer):
                                 # TODO Why I make it 1 is, to maximize query_set_size(4)
                                 # TODO We need to find optimal setting spt_batch 2 query_batch 2 or....
                                 support_sets = divide_in_and_out_batchsz(support_set, batchsz=spt_in_batchsz, mode='support', mc_num=2, max_len=self.max_len)
-                                #meta_train_query_set = self.meta_train_query_set_preprocess(query_set, batchsz=1)
-                                meta_train_query_sets = divide_in_and_out_batchsz(query_set, batchsz=qry_in_batchsz, mode='meta-train-query', mc_num=1)
+                                meta_train_query_sets = divide_in_and_out_batchsz(query_set, batchsz=1, mode='meta-train-query', mc_num=1)
 
                                 model.train()
                                 # 1. run the i-th task and compute loss for k=1~K-1
                                 for k in range(update_step): #TODO unitl now, I fixed update_step == 1, because of gradient degradation issue
-                                                             # I set spt_batchsz=1, (128, 1)
-                                                             # this means "128" weight update in inner learning,
-                                                             # so I hope to fixed update_step == 1, to avoid gradient degradation issue
                                     # in-train (support)
-                                    for si, support_set in enumerate(zip(*support_sets)): # TODO 128 steps (== 128 / spt_batchsz(=1))
+                                    ss_len = len(list(zip(*support_sets)))
+                                    for si, support_set in enumerate(zip(*support_sets)): # 128 * augmented num
+                                        if si % 30 == 0 and si != 0:
+                                            print("support sets : ", si, ss_len)
                                         lm_loss, mc_loss, _, _, _ = model(text_embedder, *support_set)
                                         loss = (lm_loss * lm_coef + mc_loss * mc_coef) / gradient_accumulation_steps
                                         # 2. compute grad on theta_pi
@@ -613,18 +617,18 @@ class GptTrainer(Trainer):
                                             mp.data = fast_weights[mp_idx]
 
                                 # in-test (query)
-                                # Evaluate the model using the target set
                                 model.eval()
                                 lm_loss_task = 0
-                                for qi, query_set in enumerate(zip(*meta_train_query_sets)):
+                                # To avoid memory lack, cut as query_real_batch_size
+                                query_set_cut = list(zip(*meta_train_query_sets))
+                                random.shuffle(query_set_cut)
+                                query_set_cut = query_set_cut[:query_real_batch_size]
+
+                                for qi, query_set in enumerate(query_set_cut):
                                     lm_loss, _, _, _, _ = model(text_embedder, *query_set, mode='meta-train-query')
                                     lm_loss_task += lm_loss
-                                losses_q[k] += (lm_loss_task / qry_out_batchsz)
+                                losses_q[k] += (lm_loss_task / len(query_set_cut))
 
-                                #model.eval()
-                                #lm_loss, _, _, _, _ = model(text_embedder, *meta_train_query_set, mode='meta-train-query')
-                                #loss_q = lm_loss / gradient_accumulation_steps
-                                #losses_q[k] += loss_q
                                 # Release unnecessary gpu allocation
                                 torch.cuda.empty_cache()
 
@@ -632,7 +636,7 @@ class GptTrainer(Trainer):
                                 for mp_idx, mp in enumerate(model_params):
                                     mp.data = original_params[mp_idx]
 
-                            # end of all tasks
+                            # End of all tasks
                             # Release unnecessary gpu allocation
                             torch.cuda.empty_cache()
                             # Total loss
@@ -642,13 +646,13 @@ class GptTrainer(Trainer):
                             metric_reporter.add_batch_stats(task_id, loss_q.item(), s_context['dlg_len'])
                             metric_reporter.report_metric(Stage.TRAIN, total_iteration, reset=False)
 
-                            # print("Meta-train loss_q :", loss_q.item())
-                            # backward -> (clip) step -> zero_grad
+                            # Backward : backward -> (clip) step -> zero_grad
                             loss_q.backward()
                             # TODO not sure to clipping or not in meta-gradient case
                             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
                             meta_optim.step()
                             meta_optim.zero_grad()
+                            torch.cuda.empty_cache()
 
                         # End of one epoch.
                         metric_reporter.report_metric(Stage.TRAIN, total_iteration, reset=False)
@@ -668,26 +672,60 @@ class GptTrainer(Trainer):
                             model_params = list(model.parameters())
                             original_params = copy.deepcopy(list(model.parameters()))
 
-                            valid_loss_of_tasks = 0
+                            valid_losses = 0
                             # task num == 2
+                            task_num = len(support_query)
                             for task_i, ((support_set, query_set), _, (s_context, t_context)) in enumerate(zip(support_query, target, context)):
                                 s_domain = s_context['domain_id'][0]
                                 task_id = s_context['task_id'][0]
-                                print("b_idx", bidx, "task_i", task_i,"s_domain :", s_domain)
-                                support_set = tuple([torch.squeeze(s, dim=1) for s in support_set])
-                                query_set = tuple([torch.squeeze(q, dim=1) for q in query_set])
+                                print("b_idx", bidx, "task_i", task_i, "task_num", task_num, "s_domain :", s_domain)
+                                support_set = tuple([torch.squeeze(s, dim=1).to('cuda') for s in support_set])
+                                query_set = tuple([torch.squeeze(q, dim=1).to('cuda') for q in query_set])
                                 # To avoid gpu memory lack,
                                 support_sets = divide_in_and_out_batchsz(support_set, batchsz=spt_in_batchsz, mode='support', mc_num=2, max_len=self.max_len)
-                                import ipdb; ipdb.set_trace()
-                                meta_test_query_set, labels = self.meta_test_query_set_preprocess(query_set, text_embedder, byte_decoder, batchsz=128)
-                                meta_test_query_sets2 = divide_in_and_out_batchsz(query_set, batchsz=qry_in_batchsz, mode='meta-train-query', mc_num=1)
-                                import ipdb; ipdb.set_trace()
+                                query_set_v1 = divide_in_and_out_batchsz(query_set, batchsz=1, mode='meta-train-query', mc_num=1)
+
+                                ## query input setting! TODO make module!
+                                # (128, 1, 1, 300)
+                                # [None] * 128
+                                # (128 ,1, 1, 300)
+                                # [None [128]]
+                                # (128, 1, 1, 300)
+                                qii_list, qll_list, qtti_list = [], [], []
+                                for mqi, (qii, _, qll, _, qtti) in enumerate(zip(*query_set_v1)):
+
+                                    nopad_qii = qii[qii != pad_token_idx].unsqueeze(0).unsqueeze(0) # (1, 1, before_response)
+                                    nopad_qii_length = nopad_qii.shape[2]
+                                    nopad_qtti = qtti[:, :, :nopad_qii_length]
+                                    last_turn_token_type = nopad_qtti[0, 0, -1].item()
+                                    reverse_iter = nopad_qii_length - 1
+                                    if last_turn_token_type == text_embedder.sys_idx: # last turn is sys turn
+                                        while nopad_qtti[0, 0, reverse_iter].item() == text_embedder.sys_idx:
+                                            reverse_iter -= 1
+                                    elif last_turn_token_type == text_embedder.usr_idx:
+                                        while nopad_qtti[0, 0, reverse_iter].item() == text_embedder.usr_idx:
+                                            reverse_iter -= 1
+                                    # now reverse_iter is on the other turn
+                                    history_border = reverse_iter + 1
+                                    history_qii = qii[:, :, :history_border]
+                                    history_qtti = qtti[:, :, :history_border]
+                                    response_with_m1 = qll[:, :, history_border:]
+                                    qii_list.append(history_qii)
+                                    qll_list.append(response_with_m1)
+                                    qtti_list.append(history_qtti)
+
+                                query_sets_v2 = (qii_list, [None] * 128, qll_list, [None] * 128, qtti_list)
+                                # return query_sets_v2
+
                                 model.train()
                                 # 1. run the i-th task and compute loss for k=1~K-1
                                 for k in range(update_step):
 
                                     # in-train(support)
+                                    ss_len = len(list(zip(*support_sets)))
                                     for si, support_set in enumerate(zip(*support_sets)):
+                                        if si % 30 == 0 and si != 0:
+                                            print("support_set: ", si, ss_len)
                                         lm_loss, mc_loss, _, _, _ = model(text_embedder, *support_set, mode='teacher')
                                         loss = (lm_loss * lm_coef + mc_loss * mc_coef) / gradient_accumulation_steps
                                         # 2. compute grad on theta_pi
@@ -703,32 +741,50 @@ class GptTrainer(Trainer):
                                             mp.data = fast_weights[mp_idx]
 
                                 # in-test (query)
-                                print("Meta_test_query...")
+                                LOG.info("Validation Meta_test_query...")
                                 model.eval()
                                 total_valid_lm_loss = 0
-                                for q_i, (query_ins, label) in enumerate(zip(meta_test_query_set, labels)):
+
+                                # query sampling! gpt memory is not enough to cover original batch size (128)
+                                query_set_cut = list(zip(*query_sets_v2))
+                                random.shuffle(query_set_cut)
+                                query_set_cut = query_set_cut[:query_real_batch_size]
+
+                                for q_i, query_ins in enumerate(query_set_cut):
+                                    if q_i % 1 == 0:
+                                        print("query_sets", q_i, len(query_set_cut))
+                                    qii, _, qll, _, qtti = query_ins
                                     input_tokens, token_type_tokens = meta_test_query_PRINT_preprocess(query_ins, tokenizer, byte_decoder)
-                                    valid_lm_loss, sentence, sentence_tokens, _, _ = model(text_embedder, *query_ins, mode='infer')
+                                    valid_lm_loss, sentence, sentence_tokens, _, _ = model(text_embedder, qii[0], None, qtti[0], None, qtti[0], mode='infer')
                                     if q_i == 0:
                                         print("[q_i]", q_i)
                                         print("[input]", ''.join(input_tokens))
                                         print("\n[prdct]", sentence)
-                                        print("[label]", label)
+                                        response_with_m1_vector = qll[0, 0, :]
+                                        response_no_m1 = response_with_m1_vector[response_with_m1_vector != -1]
+                                        response_no_m1_list = response_no_m1.cpu().numpy().tolist()
+                                        response_tokens = tokenizer.convert_ids_to_tokens(response_no_m1_list, skip_special_tokens=False)
+                                        response = [transform_byte2normal(tokenizer, byte_decoder, token) for token in response_tokens]
+                                        print("[label]", "".join(response))
                                         print("-" * 200)
-
                                     total_valid_lm_loss += valid_lm_loss.item()
 
-                                valid_loss_per_task = total_valid_lm_loss / (q_i + 1)
-                                valid_loss_of_tasks += valid_loss_per_task
+                                valid_loss_per_task = total_valid_lm_loss / query_real_batch_size
+                                valid_losses += valid_loss_per_task
 
                                 # restore original params for next tasks
                                 for mp_idx, mp in enumerate(model_params):
                                     mp.data = original_params[mp_idx]
 
-                            valid_loss = valid_loss_of_tasks / (task_i + 1)
+                                print("really", task_i)
+                            # task for loop and
+                            valid_loss = valid_losses / task_num # (task_num = 1)
                             metric_reporter.add_batch_stats(task_id, valid_loss, s_context['dlg_len'])
+                            metric_reporter.report_metric(Stage.EVAL, total_iteration, reset=False)
 
-                    #metric_reporter.report_metric(Stage.EVAL, epoch, reset=False)
+                    metric_reporter.report_metric(Stage.EVAL, total_iteration, reset=False)
+                    LOG.info('Meta test done {}'.format(valid_loss))
+                    # Meta test done
 
             best_model_path = os.path.join(
                 train_config.modules_save_dir, "model.pt"

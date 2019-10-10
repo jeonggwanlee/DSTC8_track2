@@ -13,8 +13,8 @@ def transform_byte2normal(tokenizer, byte_decoder, token):
 
 def meta_test_query_PRINT_preprocess(query_ins, tokenizer, byte_decoder):
 
-    input_ids = query_ins[0][0].cpu().numpy().tolist()
-    token_type_ids = query_ins[4][0].cpu().numpy().tolist()
+    input_ids = query_ins[0][0][0].cpu().numpy().tolist()
+    token_type_ids = query_ins[4][0][0].cpu().numpy().tolist()
     input_tokens = tokenizer.convert_ids_to_tokens(input_ids, skip_special_tokens=False)
     token_type_tokens = tokenizer.convert_ids_to_tokens(token_type_ids, skip_special_tokens=False)
     input_tokens = [transform_byte2normal(tokenizer, byte_decoder, token) for token in input_tokens]
