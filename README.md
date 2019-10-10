@@ -161,9 +161,6 @@ zlib                      1.2.11               h7b6447c_3
   sh train_ignore_domain.sh (도메인 무시하고 전체 넣어서 돌리기)
 ~~~
 
-현재 ignore_domain.sh 만 안정적으로 돌아가는 상태입니다.
-meta_learning 버전도 곧 추가 예정입니다. (valid loss 쪽 버그.)
-
 ~~~
   sh train_meta_learning.sh (meta-learning)
 ~~~
