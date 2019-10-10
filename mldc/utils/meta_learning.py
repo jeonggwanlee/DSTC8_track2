@@ -1,6 +1,6 @@
 import torch
 
-def divide_in_and_out_batchsz(self, spt_or_que_set: torch.Tensor, batchsz=1, mode='support', mc_num=2, max_len=300, manual_size=-1):
+def divide_in_and_out_batchsz(spt_or_que_set: torch.Tensor, batchsz=1, mode='support', mc_num=2, max_len=300, manual_size=-1):
     """# mode 'support' or 'meta-train-query' """
 
     ii, mti, ll, ml, tti = spt_or_que_set
