@@ -8,7 +8,7 @@ https://github.com/microsoft/dstc8-meta-dialog
 1. conda를 이용해 library를 인스톨 합니다.
 
 ~~~
-  conda install dstc8-baseline python=3.7 cython
+  conda create -n dstc8-baseline python=3.7 cython
   conda activate dstc8-baseline
   conda install -c pytorch pytorch
   pip install -e .
